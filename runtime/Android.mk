@@ -271,7 +271,12 @@ define build-libart
   art_target_or_host := $(1)
   art_ndebug_or_debug := $(2)
 
+  LOCAL_ARM_MODE := arm
+
   include $(CLEAR_VARS)
+
+  LOCAL_ARM_MODE := arm
+
   ifeq ($$(art_target_or_host),target)
     include external/stlport/libstlport.mk
   endif

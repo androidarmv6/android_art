@@ -2453,17 +2453,12 @@ void CompilerDriver::InstructionSetToLLVMTarget(InstructionSet instruction_set,
                                                 std::string& target_attr) {
   switch (instruction_set) {
     case kThumb2:
-      target_triple = "thumb-none-linux-gnueabi";
-      target_cpu = "cortex-a9";
-      target_attr = "+thumb2,+neon,+neonfp,+vfp3,+db";
-      break;
-
     case kArm:
-      target_triple = "armv7-none-linux-gnueabi";
+      target_triple = "armv6-none-linux-gnueabi";
       // TODO: Fix for Nexus S.
-      target_cpu = "cortex-a9";
+      target_cpu = "arm1136jf-s";
       // TODO: Fix for Xoom.
-      target_attr = "+v7,+neon,+neonfp,+vfp3,+db";
+      target_attr = "+vfp";
       break;
 
     case kX86:
