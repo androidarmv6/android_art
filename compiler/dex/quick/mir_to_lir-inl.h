@@ -59,6 +59,9 @@ inline LIR* Mir2Lir::RawLIR(DexOffset dalvik_offset, int opcode, int op0,
     DCHECK(!insn->flags.use_def_invalid);
     insn->u.m.use_mask = insn->u.m.def_mask = &kEncodeAll;
   }
+#ifdef ARM_MODE_WORKAROUND
+  insn->flags.ccode = 0xe;
+#endif
   return insn;
 }
 

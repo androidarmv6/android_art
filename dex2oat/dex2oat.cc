@@ -654,7 +654,10 @@ class WatchDog {
 
   static void Fatal(const std::string& message) {
     Message('F', message);
+// Arm mode is slower than thumb mode, for now do not kill dex2oat after kWatchDogTimeoutSeconds. 
+#ifndef ARM_MODE_WORKAROUND
     exit(1);
+#endif
   }
 
   void Wait() {
