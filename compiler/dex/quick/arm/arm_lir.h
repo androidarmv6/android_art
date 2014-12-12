@@ -575,6 +575,9 @@ enum ArmEncodingKind {
   kFmtFPImm,     // Encoded floating point immediate.
   kFmtOff24,     // 24-bit Thumb2 unconditional branch encoding.
   kFmtSkip,      // Unused field, but continue to next.
+#ifdef ARM_MODE_WORKAROUND
+  kFmtARMImm8,   // Zero-extened immed using [11..8,3..0]
+#endif
 };
 
 // Struct used to define the snippet positions for each Thumb opcode.

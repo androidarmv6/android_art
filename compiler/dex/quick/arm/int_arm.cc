@@ -367,6 +367,9 @@ void ArmMir2Lir::GenFusedLongCmpBranch(BasicBlock* bb, MIR* mir) {
 LIR* ArmMir2Lir::OpCmpImmBranch(ConditionCode cond, RegStorage reg, int check_value, LIR* target) {
   LIR* branch = nullptr;
   ArmConditionCode arm_cond = ArmConditionEncoding(cond);
+#ifndef ARM_MODE_WORKAROUND
+  /* ARMv6 doesn't support CBZ/CBNZ, CMP+BEQ/CMP+BNE must be used (long form) */
+
   /*
    * A common use of OpCmpImmBranch is for null checks, and using the Thumb 16-bit
    * compare-and-branch if zero is ideal if it will reach.  However, because null checks
@@ -388,6 +391,7 @@ LIR* ArmMir2Lir::OpCmpImmBranch(ConditionCode cond, RegStorage reg, int check_va
       branch = NewLIR2(kThumb2Cbz, reg.GetReg(), 0);
     }
   }
+#endif
 
   if (branch == nullptr) {
     OpRegImm(kOpCmp, reg, check_value);
@@ -911,11 +915,19 @@ bool ArmMir2Lir::GenInlinedCas(CallInfo* info, bool is_long, bool is_object) {
     NewLIR4(kThumb2Strexd /* eq */, r_tmp.GetReg(), rl_new_value.reg.GetLowReg(), rl_new_value.reg.GetHighReg(), r_ptr.GetReg());
 
   } else {
+#ifndef ARM_MODE_WORKAROUND
     NewLIR3(kThumb2Ldrex, r_tmp.GetReg(), r_ptr.GetReg(), 0);
+#else
+    NewLIR2(kThumb2Ldrex, r_tmp.GetReg(), r_ptr.GetReg());
+#endif
     OpRegReg(kOpSub, r_tmp, rl_expected.reg);
     DCHECK(last_lir_insn_->u.m.def_mask->HasBit(ResourceMask::kCCode));
     it = OpIT(kCondEq, "T");
+#ifndef ARM_MODE_WORKAROUND
     NewLIR4(kThumb2Strex /* eq */, r_tmp.GetReg(), rl_new_value.reg.GetReg(), r_ptr.GetReg(), 0);
+#else
+    NewLIR3(kThumb2Strex /* eq */, r_tmp.GetReg(), rl_new_value.reg.GetReg(), r_ptr.GetReg());
+#endif
   }
 
   // Still one conditional left from OpIT(kCondEq, "T") from either branch

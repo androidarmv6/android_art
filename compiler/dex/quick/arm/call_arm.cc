@@ -70,7 +70,19 @@ void ArmMir2Lir::GenLargeSparseSwitch(MIR* mir, uint32_t table_offset, RegLocati
     r_key = tmp;
   }
   // Materialize a pointer to the switch table
+#ifndef ARM_MODE_WORKAROUND
   NewLIR3(kThumb2Adr, r_base.GetReg(), 0, WrapPointer(tab_rec));
+#else
+  int mod_imm = ModifiedImmediate(WrapPointer(tab_rec));
+  if (mod_imm > 0) {
+    NewLIR3(kThumb2Adr, r_base.GetReg(), 0, mod_imm);
+  } else {
+    RegStorage tmp2 = AllocTemp();
+    LoadConstantNoClobber(tmp2, WrapPointer(tab_rec));
+    NewLIR3(kThumbAddRRR, r_base.GetReg(), kArmRegPC, tmp2.GetReg());
+    FreeTemp(tmp2);
+  }
+#endif
   // Set up r_idx
   RegStorage r_idx = AllocTemp();
   LoadConstant(r_idx, size);
@@ -110,7 +122,19 @@ void ArmMir2Lir::GenLargePackedSwitch(MIR* mir, uint32_t table_offset, RegLocati
   rl_src = LoadValue(rl_src, kCoreReg);
   RegStorage table_base = AllocTemp();
   // Materialize a pointer to the switch table
+#ifndef ARM_MODE_WORKAROUND
   NewLIR3(kThumb2Adr, table_base.GetReg(), 0, WrapPointer(tab_rec));
+#else
+  int mod_imm = ModifiedImmediate(WrapPointer(tab_rec));
+  if (mod_imm > 0) {
+    NewLIR3(kThumb2Adr, table_base.GetReg(), 0, mod_imm);
+  } else {
+    RegStorage tmp2 = AllocTemp();
+    LoadConstantNoClobber(tmp2, WrapPointer(tab_rec));
+    NewLIR3(kThumbAddRRR, table_base.GetReg(), kArmRegPC, tmp2.GetReg());
+    FreeTemp(tmp2);
+  }
+#endif
   int low_key = s4FromSwitchData(&table[2]);
   RegStorage keyReg;
   // Remove the bias, if necessary
@@ -166,7 +190,19 @@ void ArmMir2Lir::GenFillArrayData(uint32_t table_offset, RegLocation rl_src) {
   LoadWordDisp(rs_rARM_SELF, QUICK_ENTRYPOINT_OFFSET(4, pHandleFillArrayData).Int32Value(),
                rs_rARM_LR);
   // Materialize a pointer to the fill data image
+#ifndef ARM_MODE_WORKAROUND
   NewLIR3(kThumb2Adr, rs_r1.GetReg(), 0, WrapPointer(tab_rec));
+#else
+  int mod_imm = ModifiedImmediate(WrapPointer(tab_rec));
+  if (mod_imm > 0) {
+    NewLIR3(kThumb2Adr, rs_r1.GetReg(), 0, mod_imm);
+  } else {
+    RegStorage tmp2 = AllocTemp();
+    LoadConstantNoClobber(tmp2, WrapPointer(tab_rec));
+    NewLIR3(kThumbAddRRR, rs_r1.GetReg(), kArmRegPC, tmp2.GetReg());
+    FreeTemp(tmp2);
+  }
+#endif
   ClobberCallerSave();
   LIR* call_inst = OpReg(kOpBlx, rs_rARM_LR);
   MarkSafepointPC(call_inst);
@@ -193,12 +229,24 @@ void ArmMir2Lir::GenMonitorEnter(int opt_flags, RegLocation rl_src) {
       }
     }
     Load32Disp(rs_rARM_SELF, Thread::ThinLockIdOffset<4>().Int32Value(), rs_r2);
+#ifndef ARM_MODE_WORKAROUND
     NewLIR3(kThumb2Ldrex, rs_r1.GetReg(), rs_r0.GetReg(),
         mirror::Object::MonitorOffset().Int32Value() >> 2);
+#else
+    NewLIR3(kThumb2AddRRI12, rs_r0.GetReg(), rs_r0.GetReg(), mirror::Object::MonitorOffset().Int32Value());
+    NewLIR2(kThumb2Ldrex, rs_r1.GetReg(), rs_r0.GetReg());
+    NewLIR3(kThumb2SubRRI12, rs_r0.GetReg(), rs_r0.GetReg(), mirror::Object::MonitorOffset().Int32Value());
+#endif
     MarkPossibleNullPointerException(opt_flags);
     LIR* not_unlocked_branch = OpCmpImmBranch(kCondNe, rs_r1, 0, NULL);
+#ifndef ARM_MODE_WORKAROUND
     NewLIR4(kThumb2Strex, rs_r1.GetReg(), rs_r2.GetReg(), rs_r0.GetReg(),
         mirror::Object::MonitorOffset().Int32Value() >> 2);
+#else
+    NewLIR3(kThumb2AddRRI12, rs_r0.GetReg(), rs_r0.GetReg(), mirror::Object::MonitorOffset().Int32Value());
+    NewLIR3(kThumb2Strex, rs_r1.GetReg(), rs_r2.GetReg(), rs_r0.GetReg());
+    NewLIR3(kThumb2SubRRI12, rs_r0.GetReg(), rs_r0.GetReg(), mirror::Object::MonitorOffset().Int32Value());
+#endif
     LIR* lock_success_branch = OpCmpImmBranch(kCondEq, rs_r1, 0, NULL);
 
 
@@ -221,13 +269,25 @@ void ArmMir2Lir::GenMonitorEnter(int opt_flags, RegLocation rl_src) {
     // Explicit null-check as slow-path is entered using an IT.
     GenNullCheck(rs_r0, opt_flags);
     Load32Disp(rs_rARM_SELF, Thread::ThinLockIdOffset<4>().Int32Value(), rs_r2);
+#ifndef ARM_MODE_WORKAROUND
     NewLIR3(kThumb2Ldrex, rs_r1.GetReg(), rs_r0.GetReg(),
         mirror::Object::MonitorOffset().Int32Value() >> 2);
+#else
+    NewLIR3(kThumb2AddRRI12, rs_r0.GetReg(), rs_r0.GetReg(), mirror::Object::MonitorOffset().Int32Value());
+    NewLIR2(kThumb2Ldrex, rs_r1.GetReg(), rs_r0.GetReg());
+    NewLIR3(kThumb2SubRRI12, rs_r0.GetReg(), rs_r0.GetReg(), mirror::Object::MonitorOffset().Int32Value());
+#endif
     MarkPossibleNullPointerException(opt_flags);
     OpRegImm(kOpCmp, rs_r1, 0);
     LIR* it = OpIT(kCondEq, "");
+#ifndef ARM_MODE_WORKAROUND
     NewLIR4(kThumb2Strex/*eq*/, rs_r1.GetReg(), rs_r2.GetReg(), rs_r0.GetReg(),
         mirror::Object::MonitorOffset().Int32Value() >> 2);
+#else
+    NewLIR3(kThumb2AddRRI12, rs_r0.GetReg(), rs_r0.GetReg(), mirror::Object::MonitorOffset().Int32Value());
+    NewLIR3(kThumb2Strex/*eq*/, rs_r1.GetReg(), rs_r2.GetReg(), rs_r0.GetReg());
+    NewLIR3(kThumb2SubRRI12, rs_r0.GetReg(), rs_r0.GetReg(), mirror::Object::MonitorOffset().Int32Value());
+#endif
     OpEndIT(it);
     OpRegImm(kOpCmp, rs_r1, 0);
     it = OpIT(kCondNe, "T");
