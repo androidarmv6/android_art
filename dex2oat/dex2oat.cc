@@ -654,7 +654,6 @@ class WatchDog {
 
   static void Fatal(const std::string& message) {
     Message('F', message);
-    exit(1);
   }
 
   void Wait() {

@@ -109,7 +109,11 @@ Assembler* Assembler::Create(InstructionSet instruction_set) {
     case kArm:
       return new arm::Arm32Assembler();
     case kThumb2:
+#ifndef ARM_MODE_WORKAROUND
       return new arm::Thumb2Assembler();
+#else
+      return new arm::Arm32Assembler();
+#endif
     case kArm64:
       return new arm64::Arm64Assembler();
     case kMips:
