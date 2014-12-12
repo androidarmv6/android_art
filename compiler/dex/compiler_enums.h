@@ -86,6 +86,7 @@ enum BBType {
 
 // Shared pseudo opcodes - must be < 0.
 enum LIRPseudoOpcode {
+  kPseudoIT = -17,
   kPseudoExportedPC = -16,
   kPseudoSafepointPC = -15,
   kPseudoIntrinsicRetry = -14,
@@ -539,6 +540,10 @@ enum FixupKind {
   kFixupMovImmLST,   // kThumb2MovImm16LST.
   kFixupMovImmHST,   // kThumb2MovImm16HST.
   kFixupAlign4,      // Align to 4-byte boundary.
+  kFixupMovImm8,     // ARM move version of kThumb2MovImm16LST/kThumb2MovImm16HST.
+  kFixupMovImm16,
+  kFixupMovImm24,
+  kFixupMovImm32,
 };
 
 std::ostream& operator<<(std::ostream& os, const FixupKind& kind);
