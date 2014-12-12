@@ -41,6 +41,7 @@ LIR* ArmMir2Lir::OpCmpBranch(ConditionCode cond, RegStorage src1, RegStorage src
  * is not met.
  */
 LIR* ArmMir2Lir::OpIT(ConditionCode ccode, const char* guide) {
+#ifndef ARM_MODE_WORKAROUND
   int mask;
   int mask3 = 0;
   int mask2 = 0;
@@ -66,9 +67,51 @@ LIR* ArmMir2Lir::OpIT(ConditionCode ccode, const char* guide) {
   mask = (mask3 << 3) | (mask2 << 2) | (mask1 << 1) |
        (1 << (3 - strlen(guide)));
   return NewLIR2(kThumb2It, code, mask);
+#else
+  /* Conditional Code in ARM Mode:
+   *
+   * In ARM Mode "IT" is not needed because each opcode has a conditional field,
+   * anyway, to avoid diverting from upstream ART code, we handle IT-related
+   * functions.
+   * A tipical conditional sequence is the following:
+   *
+   * 1. LIR* it = OpIT(kCondEq, "T");
+   * 2. NewLIRx(kInstruction, operands);
+   *    NewLIRx(kInstruction, operands);
+   * 3. OpEndIT(it);
+   * 4. <assembler>
+   *
+   * 1. OpIT parses IT condition and "guide", a new pseudo-opcode is generated. It
+   *    takes instructions conditions as operands. Conditional instrucions still
+   *    aren't added to LIRs list.
+   * 2. Conditional instrucions are parsed.
+   * 3. When OpEndIT is called all conditional instrucions are in the LIRs list.
+   *    Now we can set the ccode flag for each instrucion.
+   * 4. The assembler set the conditional field accordingly with ccode flag.
+   *
+   * This patter is really twisted, mainly because when OpIT is called conditional
+   * instructions are not available so condition and guide must be stored and used
+   * when instructions are available (OpEndIT).
+   *
+   * NOTE: "ccode" is a new LIR flag introduced by this patch.
+   */
+
+  unsigned int count;
+  unsigned int op[3] = {0xf,0xf,0xf};
+
+  for (count=0; count < strlen(guide); count++) {
+    if (guide[count] == 'T') {
+      op[count] = static_cast<int>(ccode);
+    } else {
+      op[count] = ((~static_cast<int>(ccode))&1)|(static_cast<int>(ccode)&7);
+    }
+  }
+  return NewLIR4(kPseudoIT, static_cast<int>(ccode), op[0], op[1], op[2]);
+#endif
 }
 
 void ArmMir2Lir::UpdateIT(LIR* it, const char* new_guide) {
+#ifndef ARM_MODE_WORKAROUND
   int mask;
   int mask3 = 0;
   int mask2 = 0;
@@ -94,6 +137,21 @@ void ArmMir2Lir::UpdateIT(LIR* it, const char* new_guide) {
   mask = (mask3 << 3) | (mask2 << 2) | (mask1 << 1) |
       (1 << (3 - strlen(new_guide)));
   it->operands[1] = mask;
+#else
+  unsigned int count;
+  unsigned int ccode = it->operands[0];
+
+  for (count=1; count<4; count++) it->operands[count]=0xe;
+
+  it->operands[0] = ccode;
+  for (count=0; count < strlen(new_guide); count++) {
+    if (new_guide[count] == 'T') {
+      it->operands[count+1] = ccode;
+    } else {
+      it->operands[count+1] = ((~ccode)&1)|(ccode&7);
+    }
+  }
+#endif
 }
 
 void ArmMir2Lir::OpEndIT(LIR* it) {
@@ -102,6 +160,15 @@ void ArmMir2Lir::OpEndIT(LIR* it) {
   //       in the IT instruction.
   CHECK(it != nullptr);
   GenBarrier();
+#ifdef ARM_MODE_WORKAROUND
+  int count;
+  LIR* next = it->next;
+
+  for (count=0; count < 4 && next && it->operands[count] != 0xe; count++) {
+    next->flags.ccode = it->operands[count];
+    next = next->next;
+  }
+#endif
 }
 
 /*
@@ -367,6 +434,9 @@ void ArmMir2Lir::GenFusedLongCmpBranch(BasicBlock* bb, MIR* mir) {
 LIR* ArmMir2Lir::OpCmpImmBranch(ConditionCode cond, RegStorage reg, int check_value, LIR* target) {
   LIR* branch = nullptr;
   ArmConditionCode arm_cond = ArmConditionEncoding(cond);
+#ifndef ARM_MODE_WORKAROUND
+  /* ARMv6 doesn't support CBZ/CBNZ, CMP+BEQ/CMP+BNE must be used (long form) */
+
   /*
    * A common use of OpCmpImmBranch is for null checks, and using the Thumb 16-bit
    * compare-and-branch if zero is ideal if it will reach.  However, because null checks
@@ -388,6 +458,7 @@ LIR* ArmMir2Lir::OpCmpImmBranch(ConditionCode cond, RegStorage reg, int check_va
       branch = NewLIR2(kThumb2Cbz, reg.GetReg(), 0);
     }
   }
+#endif
 
   if (branch == nullptr) {
     OpRegImm(kOpCmp, reg, check_value);
@@ -892,7 +963,26 @@ bool ArmMir2Lir::GenInlinedCas(CallInfo* info, bool is_long, bool is_object) {
     if (!load_early) {
       LoadValueDirectWide(rl_src_expected, rl_expected.reg);
     }
+#ifndef ARM_MODE_WORKAROUND
     NewLIR3(kThumb2Ldrexd, r_tmp.GetReg(), r_tmp_high.GetReg(), r_ptr.GetReg());
+#else
+    if ((r_tmp.GetReg() & 1) != 0 && r_tmp.GetReg() < 12) {
+      NewLIR1(kThumb2Push, 3);
+      NewLIR3(kThumb2Ldrexd, 0, 1, r_ptr.GetReg());
+      NewLIR2(kThumb2MovRR, r_tmp.GetReg(), 0);
+      NewLIR2(kThumb2MovRR, r_tmp_high.GetReg(), 1);
+      NewLIR1(kThumb2Pop, 3);
+    } else {
+      if (r_tmp.GetReg()+1 != r_tmp_high.GetReg()) {
+        MarkTemp(RegStorage(RegStorage::k32BitSolo, r_tmp.GetReg()+1));
+        NewLIR3(kThumb2Ldrexd, r_tmp.GetReg(), r_tmp.GetReg()+1, r_ptr.GetReg());
+        NewLIR2(kThumb2MovRR, r_tmp_high.GetReg(), r_tmp.GetReg()+1);
+        FreeTemp(RegStorage(RegStorage::k32BitSolo, r_tmp.GetReg()+1));
+      } else {
+        NewLIR3(kThumb2Ldrexd, r_tmp.GetReg(), r_tmp_high.GetReg(), r_ptr.GetReg());
+      }
+    }
+#endif
     OpRegReg(kOpSub, r_tmp, rl_expected.reg.GetLow());
     OpRegReg(kOpSub, r_tmp_high, rl_expected.reg.GetHigh());
     if (!load_early) {
@@ -908,14 +998,33 @@ bool ArmMir2Lir::GenInlinedCas(CallInfo* info, bool is_long, bool is_object) {
 
     DCHECK(last_lir_insn_->u.m.def_mask->HasBit(ResourceMask::kCCode));
     it = OpIT(kCondEq, "T");
+#ifndef ARM_MODE_WORKAROUND
     NewLIR4(kThumb2Strexd /* eq */, r_tmp.GetReg(), rl_new_value.reg.GetLowReg(), rl_new_value.reg.GetHighReg(), r_ptr.GetReg());
+#else
+    if (rl_new_value.reg.GetLowReg()+1 != rl_new_value.reg.GetHighReg()) {
+      MarkTemp(RegStorage(RegStorage::k32BitSolo, rl_new_value.reg.GetLowReg()+1));
+      NewLIR4(kThumb2Strexd /* eq */, r_tmp.GetReg(), rl_new_value.reg.GetLowReg(), rl_new_value.reg.GetLowReg()+1, r_ptr.GetReg());
+      NewLIR2(kThumb2MovRR, rl_new_value.reg.GetHighReg(), rl_new_value.reg.GetLowReg()+1);
+      FreeTemp(RegStorage(RegStorage::k32BitSolo, rl_new_value.reg.GetLowReg()+1));
+    } else {
+      NewLIR4(kThumb2Strexd /* eq */, r_tmp.GetReg(), rl_new_value.reg.GetLowReg(), rl_new_value.reg.GetHighReg(), r_ptr.GetReg());
+    }
+#endif
 
   } else {
+#ifndef ARM_MODE_WORKAROUND
     NewLIR3(kThumb2Ldrex, r_tmp.GetReg(), r_ptr.GetReg(), 0);
+#else
+    NewLIR2(kThumb2Ldrex, r_tmp.GetReg(), r_ptr.GetReg());
+#endif
     OpRegReg(kOpSub, r_tmp, rl_expected.reg);
     DCHECK(last_lir_insn_->u.m.def_mask->HasBit(ResourceMask::kCCode));
     it = OpIT(kCondEq, "T");
+#ifndef ARM_MODE_WORKAROUND
     NewLIR4(kThumb2Strex /* eq */, r_tmp.GetReg(), rl_new_value.reg.GetReg(), r_ptr.GetReg(), 0);
+#else
+    NewLIR3(kThumb2Strex /* eq */, r_tmp.GetReg(), rl_new_value.reg.GetReg(), r_ptr.GetReg());
+#endif
   }
 
   // Still one conditional left from OpIT(kCondEq, "T") from either branch
