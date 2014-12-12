@@ -147,13 +147,15 @@
 .endm
 
 .macro RETURN_IF_RESULT_IS_ZERO
-    cbnz   r0, 1f              @ result non-zero branch over
+    cmp    r0, #0
+    bne    1f
     bx     lr                  @ return
 1:
 .endm
 
 .macro RETURN_IF_RESULT_IS_NON_ZERO
-    cbz    r0, 1f              @ result zero branch over
+    cmp    r0, #0
+    beq    1f
     bx     lr                  @ return
 1:
 .endm
@@ -266,7 +268,8 @@ ENTRY \c_name
     .cfi_adjust_cfa_offset -16
     mov    r12, r1                        @ save Method*->code_
     RESTORE_REF_AND_ARGS_CALLEE_SAVE_FRAME
-    cbz    r0, 1f                         @ did we find the target? if not go to exception delivery
+    cmp    r0, #0
+    beq    1f
     bx     r12                            @ tail call to target
 1:
     DELIVER_PENDING_EXCEPTION
@@ -372,34 +375,42 @@ END art_quick_handle_fill_data
      */
     .extern artLockObjectFromCode
 ENTRY art_quick_lock_object
-    cbz    r0, .Lslow_lock
+    cmp    r0, #0
+    beq    .Lslow_lock
+    add    r0, #LOCK_WORD_OFFSET
 .Lretry_lock:
     ldr    r2, [r9, #THREAD_ID_OFFSET]
-    ldrex  r1, [r0, #LOCK_WORD_OFFSET]
-    cbnz   r1, .Lnot_unlocked         @ already thin locked
+    ldrex  r1, [r0]
+    cmp    r1, #0
+    bne    .Lnot_unlocked
     @ unlocked case - r2 holds thread id with count of 0
-    strex  r3, r2, [r0, #LOCK_WORD_OFFSET]
-    cbnz   r3, .Lstrex_fail           @ store failed, retry
-    dmb    ish                        @ full (LoadLoad|LoadStore) memory barrier
+    strex  r3, r2, [r0]
+    cmp    r3, #0
+    bne    .Lstrex_fail
     bx lr
 .Lstrex_fail:
     b .Lretry_lock                    @ unlikely forward branch, need to reload and recheck r1/r2
 .Lnot_unlocked:
     lsr    r3, r1, 30
-    cbnz   r3, .Lslow_lock            @ if either of the top two bits are set, go slow path
+    cmp    r3, #0
+    bne    .Lslow_lock
     eor    r2, r1, r2                 @ lock_word.ThreadId() ^ self->ThreadId()
     uxth   r2, r2                     @ zero top 16 bits
-    cbnz   r2, .Lslow_lock            @ lock word and self thread id's match -> recursive lock
+    cmp    r2, #0
+    bne    .Lslow_lock
                                       @ else contention, go to slow path
     add    r2, r1, #65536             @ increment count in lock word placing in r2 for storing
     lsr    r1, r2, 30                 @ if either of the top two bits are set, we overflowed.
-    cbnz   r1, .Lslow_lock            @ if we overflow the count go slow path
-    str    r2, [r0, #LOCK_WORD_OFFSET] @ no need for strex as we hold the lock
+    cmp    r1, #0
+    bne    .Lslow_lock
+    str    r2, [r0] @ no need for strex as we hold the lock
+    sub    r0, #LOCK_WORD_OFFSET
     bx lr
 .Lslow_lock:
     SETUP_REF_ONLY_CALLEE_SAVE_FRAME  @ save callee saves in case we block
     mov    r1, r9                     @ pass Thread::Current
     mov    r2, sp                     @ pass SP
+    sub    r0, #LOCK_WORD_OFFSET
     bl     artLockObjectFromCode      @ (Object* obj, Thread*, SP)
     RESTORE_REF_ONLY_CALLEE_SAVE_FRAME
     RETURN_IF_RESULT_IS_ZERO
@@ -412,18 +423,20 @@ END art_quick_lock_object
      */
     .extern artUnlockObjectFromCode
 ENTRY art_quick_unlock_object
-    cbz    r0, .Lslow_unlock
+    cmp    r0, #0
+    beq    .Lslow_unlock
     ldr    r1, [r0, #LOCK_WORD_OFFSET]
     lsr    r2, r1, 30
-    cbnz   r2, .Lslow_unlock          @ if either of the top two bits are set, go slow path
+    cmp    r2, #0
+    bne    .Lslow_unlock
     ldr    r2, [r9, #THREAD_ID_OFFSET]
     eor    r3, r1, r2                 @ lock_word.ThreadId() ^ self->ThreadId()
     uxth   r3, r3                     @ zero top 16 bits
-    cbnz   r3, .Lslow_unlock          @ do lock word and self thread id's match?
+    cmp    r3, #0
+    bne    .Lslow_unlock
     cmp    r1, #65536
     bpl    .Lrecursive_thin_unlock
     @ transition to unlocked, r3 holds 0
-    dmb    ish                        @ full (LoadStore|StoreStore) memory barrier
     str    r3, [r0, #LOCK_WORD_OFFSET]
     bx     lr
 .Lrecursive_thin_unlock:
@@ -456,7 +469,8 @@ ENTRY art_quick_check_cast
     .pad #4
     .cfi_adjust_cfa_offset 4
     bl artIsAssignableFromCode
-    cbz    r0, .Lthrow_class_cast_exception
+    cmp    r0, #0
+    beq    .Lthrow_class_cast_exception
     add sp, #4
     .cfi_adjust_cfa_offset -4
     pop {r0-r1, pc}
@@ -496,7 +510,8 @@ END art_quick_aput_obj_with_bound_check
 
     .hidden art_quick_aput_obj
 ENTRY art_quick_aput_obj
-    cbz r2, .Ldo_aput_null
+    cmp r2, #0
+    beq  .Ldo_aput_null
     ldr r3, [r0, #CLASS_OFFSET]
     ldr ip, [r2, #CLASS_OFFSET]
     ldr r3, [r3, #CLASS_COMPONENT_TYPE_OFFSET]
@@ -524,7 +539,8 @@ ENTRY art_quick_aput_obj
     mov r1, ip
     mov r0, r3
     bl artIsAssignableFromCode
-    cbz r0, .Lthrow_array_store_exception
+    cmp r0, #0
+    beq .Lthrow_array_store_exception
     pop {r0-r2, lr}
     .cfi_restore r0
     .cfi_restore r1
@@ -612,7 +628,8 @@ ENTRY art_quick_get32_static
     bl     artGet32StaticFromCode        @ (uint32_t field_idx, const Method* referrer, Thread*, SP)
     ldr    r1, [r9, #THREAD_EXCEPTION_OFFSET]  @ load Thread::Current()->exception_
     RESTORE_REF_ONLY_CALLEE_SAVE_FRAME
-    cbnz   r1, 1f                        @ success if no exception pending
+    cmp    r1, #0
+    bne    1f
     bx     lr                            @ return on success
 1:
     DELIVER_PENDING_EXCEPTION
@@ -630,7 +647,8 @@ ENTRY art_quick_get64_static
     bl     artGet64StaticFromCode        @ (uint32_t field_idx, const Method* referrer, Thread*, SP)
     ldr    r2, [r9, #THREAD_EXCEPTION_OFFSET]  @ load Thread::Current()->exception_
     RESTORE_REF_ONLY_CALLEE_SAVE_FRAME
-    cbnz   r2, 1f                        @ success if no exception pending
+    cmp    r2, #0
+    bne    1f
     bx     lr                            @ return on success
 1:
     DELIVER_PENDING_EXCEPTION
@@ -648,7 +666,8 @@ ENTRY art_quick_get_obj_static
     bl     artGetObjStaticFromCode       @ (uint32_t field_idx, const Method* referrer, Thread*, SP)
     ldr    r1, [r9, #THREAD_EXCEPTION_OFFSET]  @ load Thread::Current()->exception_
     RESTORE_REF_ONLY_CALLEE_SAVE_FRAME
-    cbnz   r1, 1f                        @ success if no exception pending
+    cmp    r1, #0
+    bne    1f
     bx     lr                            @ return on success
 1:
     DELIVER_PENDING_EXCEPTION
@@ -668,7 +687,8 @@ ENTRY art_quick_get32_instance
     add    sp, #16                       @ strip the extra frame
     ldr    r1, [r9, #THREAD_EXCEPTION_OFFSET]  @ load Thread::Current()->exception_
     RESTORE_REF_ONLY_CALLEE_SAVE_FRAME
-    cbnz   r1, 1f                        @ success if no exception pending
+    cmp    r1, #0
+    bne    1f
     bx     lr                            @ return on success
 1:
     DELIVER_PENDING_EXCEPTION
@@ -691,7 +711,8 @@ ENTRY art_quick_get64_instance
     .cfi_adjust_cfa_offset -16
     ldr    r2, [r9, #THREAD_EXCEPTION_OFFSET]  @ load Thread::Current()->exception_
     RESTORE_REF_ONLY_CALLEE_SAVE_FRAME
-    cbnz   r2, 1f                        @ success if no exception pending
+    cmp    r2, #0
+    bne    1f
     bx     lr                            @ return on success
 1:
     DELIVER_PENDING_EXCEPTION
@@ -714,7 +735,8 @@ ENTRY art_quick_get_obj_instance
     .cfi_adjust_cfa_offset -16
     ldr    r1, [r9, #THREAD_EXCEPTION_OFFSET]  @ load Thread::Current()->exception_
     RESTORE_REF_ONLY_CALLEE_SAVE_FRAME
-    cbnz   r1, 1f                        @ success if no exception pending
+    cmp    r1, #0
+    bne    1f
     bx     lr                            @ return on success
 1:
     DELIVER_PENDING_EXCEPTION
@@ -918,7 +940,8 @@ ENTRY art_quick_test_suspend
 #ifdef ARM_R4_SUSPEND_FLAG
     ldrh    r0, [rSELF, #THREAD_FLAGS_OFFSET]
     mov    rSUSPEND, #SUSPEND_CHECK_INTERVAL  @ reset rSUSPEND to SUSPEND_CHECK_INTERVAL
-    cbnz   r0, 1f                             @ check Thread::Current()->suspend_count_ == 0
+    cmp    r0, #0
+    bne    1f
     bx     lr                                 @ return if suspend_count_ == 0
 1:
 #endif
@@ -952,7 +975,8 @@ ENTRY art_quick_proxy_invoke_handler
     ldr     r2, [r9, #THREAD_EXCEPTION_OFFSET]  @ load Thread::Current()->exception_
     add     sp, #16                @ skip r1-r3, 4 bytes padding.
     .cfi_adjust_cfa_offset -16
-    cbnz    r2, 1f                 @ success if no exception is pending
+    cmp     r2, #0
+    bne     1f
     RESTORE_REF_ONLY_CALLEE_SAVE_FRAME
     bx      lr                     @ return on success
 1:
@@ -978,7 +1002,8 @@ ENTRY art_quick_resolution_trampoline
     mov     r2, r9                 @ pass Thread::Current
     mov     r3, sp                 @ pass SP
     blx     artQuickResolutionTrampoline  @ (Method* called, receiver, Thread*, SP)
-    cbz     r0, 1f                 @ is code pointer null? goto exception
+    cmp     r0, #0
+    beq     1f
     mov     r12, r0
     ldr  r0, [sp, #0]              @ load resolved method in r0
     RESTORE_REF_AND_ARGS_CALLEE_SAVE_FRAME
@@ -1018,7 +1043,8 @@ ENTRY_NO_HIDE art_quick_generic_jni_trampoline
     // r1: pointer to the bottom of the used area of the alloca, can restore stack till there.
 
     // Check for error = 0.
-    cbz r0, .Lentry_error
+    cmp r0, #0
+    beq .Lentry_error
 
     // Release part of the alloca.
     mov sp, r1
@@ -1057,7 +1083,8 @@ ENTRY_NO_HIDE art_quick_generic_jni_trampoline
 
     // Pending exceptions possible.
     ldr r2, [r9, #THREAD_EXCEPTION_OFFSET]  @ load Thread::Current()->exception_
-    cbnz r2, .Lexception_in_native
+    cmp  r2, #0
+    bne  .Lexception_in_native
 
     // Tear down the callee-save frame.
     add  sp, #12                      @ rewind sp
@@ -1095,7 +1122,8 @@ ENTRY_NO_HIDE art_quick_to_interpreter_bridge
     add     sp, #16                @ skip r1-r3, 4 bytes padding.
     .cfi_adjust_cfa_offset -16
     RESTORE_REF_ONLY_CALLEE_SAVE_FRAME
-    cbnz    r2, 1f                 @ success if no exception is pending
+    cmp     r2, #0
+    bne     1f
     bx    lr                       @ return on success
 1:
     DELIVER_PENDING_EXCEPTION
@@ -1397,7 +1425,8 @@ END art_quick_indexof
 ENTRY art_quick_string_compareto
     mov    r2, r0         @ this to r2, opening up r0 for return value
     sub    r0, r2, r1     @ Same?
-    cbnz   r0,1f
+    cmp    r0, #0
+    bne    1f
     bx     lr
 1:                        @ Same strings, return.
 

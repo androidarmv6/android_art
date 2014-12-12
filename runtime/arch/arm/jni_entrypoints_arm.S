@@ -34,7 +34,12 @@ ENTRY art_jni_dlsym_lookup_stub
     mov    r12, r0                        @ save result in r12
     add    sp, #12                        @ restore stack pointer
     .cfi_adjust_cfa_offset -12
+#if __ARM_ARCH >= 7
     cbz    r0, 1f                         @ is method code null?
+#else
+    cmp    r0, #0
+    beq    1f
+#endif
     pop    {r0, r1, r2, r3, lr}           @ restore regs
     .cfi_adjust_cfa_offset -20
     .cfi_restore r0
