@@ -229,6 +229,10 @@ void ArmMir2Lir::SetupTargetResourceMasks(LIR* lir, uint64_t flags,
         SetupRegMask(use_mask, lir->operands[1] + i);
       }
     }
+
+#ifndef ARM_MODE_WORKAROUND
+    /* In ARM mode we do not need this fixup */
+
     /* Fixup for kThumbPush/lr and kThumbPop/pc */
     if (opcode == kThumbPush || opcode == kThumbPop) {
       constexpr ResourceMask r8Mask = GetRegMaskArm(rs_r8);
@@ -240,6 +244,8 @@ void ArmMir2Lir::SetupTargetResourceMasks(LIR* lir, uint64_t flags,
         def_mask->SetBit(kArmRegPC);;
       }
     }
+#endif
+
     if (flags & REG_DEF_LR) {
       def_mask->SetBit(kArmRegLR);
     }
@@ -308,11 +314,13 @@ static char* DecodeRegList(int opcode, int vector, char* buf, size_t buf_size) {
   for (i = 0; i < 16; i++, vector >>= 1) {
     if (vector & 0x1) {
       int reg_id = i;
+#ifndef ARM_MODE_WORKAROUND
       if (opcode == kThumbPush && i == 8) {
         reg_id = rs_rARM_LR.GetRegNum();
       } else if (opcode == kThumbPop && i == 8) {
         reg_id = rs_rARM_PC.GetRegNum();
       }
+#endif
       if (printed) {
         snprintf(buf + strlen(buf), buf_size - strlen(buf), ", r%d", reg_id);
       } else {

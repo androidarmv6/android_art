@@ -113,6 +113,7 @@ static int LeadingZeros(uint32_t val) {
   return n - val;
 }
 
+#ifndef ARM_MODE_WORKAROUND
 /*
  * Determine whether value can be encoded as a Thumb2 modified
  * immediate.  If not, return -1.  If so, return i:imm3:a:bcdefgh form.
@@ -145,6 +146,24 @@ int ArmMir2Lir::ModifiedImmediate(uint32_t value) {
   /* Put it all together */
   return value | ((0x8 + z_leading) << 7); /* [01000..11111]:bcdefgh */
 }
+#else
+uint32_t _rotl(const uint32_t value, int shift) {
+    if ((shift &= sizeof(value)*8 - 1) == 0)
+      return value;
+    return (value << shift) | (value >> (sizeof(value)*8 - shift));
+}
+
+// TODO -> Test this extensively
+int ArmMir2Lir::ModifiedImmediate(uint32_t value) {
+  int count;
+  for (count=0; count < 32; count+=2) {
+    if ((_rotl(value, count) & 0xFFFFFF00) == 0) {
+      return (count<<7 | _rotl(value, count));
+    }
+  }
+  return -1;
+}
+#endif
 
 bool ArmMir2Lir::InexpensiveConstantInt(int32_t value) {
   return (ModifiedImmediate(value) >= 0) || (ModifiedImmediate(~value) >= 0);
@@ -193,6 +212,7 @@ LIR* ArmMir2Lir::LoadConstantNoClobber(RegStorage r_dest, int value) {
     res = NewLIR2(kThumb2MvnI8M, r_dest.GetReg(), mod_imm);
     return res;
   }
+#ifndef ARM_MODE_WORKAROUND
   /* 16-bit immediate? */
   if ((value & 0xffff) == value) {
     res = NewLIR2(kThumb2MovImm16, r_dest.GetReg(), value);
@@ -201,6 +221,29 @@ LIR* ArmMir2Lir::LoadConstantNoClobber(RegStorage r_dest, int value) {
   /* Do a low/high pair */
   res = NewLIR2(kThumb2MovImm16, r_dest.GetReg(), Low16Bits(value));
   NewLIR2(kThumb2MovImm16H, r_dest.GetReg(), High16Bits(value));
+#else
+  /* This is an unfortunate hack, ARMv6 doesn't support movt/movw,
+   * so there isn't a fast way to load 32bits constants (I don't
+   * know how to implement "ldr rX, =#const" in ART).
+   * The most generic way is the following:
+   *   1. rX = 0
+   *   2. rX |= (const&0x000000FF)
+   *   3. rX |= (const&0x0000FF00)
+   *   4. rX |= (const&0x00FF0000)
+   *   5. rX |= (const&0xFF000000)
+   */
+
+  res = NewLIR(kThumb2MovI8M, r_dest.GetReg(), 0);
+
+  mod_imm = ModifiedImmediate(value & 0xFF);
+  NewLIR3(kThumb2OrrRRI8M, r_dest.GetReg(), r_dest.GetReg(), mod_imm);
+  mod_imm = ModifiedImmediate(value & 0xFF00);
+  NewLIR3(kThumb2OrrRRI8M, r_dest.GetReg(), r_dest.GetReg(), mod_imm);
+  mod_imm = ModifiedImmediate(value & 0xFF0000);
+  NewLIR3(kThumb2OrrRRI8M, r_dest.GetReg(), r_dest.GetReg(), mod_imm);
+  mod_imm = ModifiedImmediate(value & 0xFF000000);
+  NewLIR3(kThumb2OrrRRI8M, r_dest.GetReg(), r_dest.GetReg(), mod_imm);
+#endif
   return res;
 }
 
@@ -605,7 +648,16 @@ LIR* ArmMir2Lir::OpRegRegImm(OpKind op, RegStorage r_dest, RegStorage r_src1, in
 LIR* ArmMir2Lir::OpRegImm(OpKind op, RegStorage r_dest_src1, int value) {
   bool neg = (value < 0);
   int32_t abs_value = (neg) ? -value : value;
+#ifndef ARM_MODE_WORKAROUND
   bool short_form = (((abs_value & 0xff) == abs_value) && r_dest_src1.Low8());
+#else
+  /* If short_from is true kThumbSubRI8/kThumbAddRI8 are used, but we can't
+   * use them because these instrucions need a ModImm. In place of handling
+   * ModImm here, we can let OpRegRegImm doing it for us (if short_form is false
+   * OpRegRegImm is called).
+   */
+  bool short_form = 0;
+#endif
   ArmOpcode opcode = kThumbBkpt;
   switch (op) {
     case kOpAdd:
@@ -915,7 +967,13 @@ LIR* ArmMir2Lir::LoadBaseDispBody(RegStorage r_base, int displacement, RegStorag
       if (all_low && displacement < 64 && displacement >= 0) {
         DCHECK_EQ((displacement & 0x1), 0);
         short_form = true;
+#ifndef ARM_MODE_WORKAROUND
+        /* ARM mode,   offset = imm4H:imm4L
+         * Thumb mode, offset = imm5 / 2
+         * In arm mode we do not need to counterpoise the division.
+         */
         encoded_disp >>= 1;
+#endif
         opcode = kThumbLdrhRRI5;
       } else if (displacement < 4092 && displacement >= 0) {
         short_form = true;
