@@ -160,6 +160,10 @@ art_cflags := \
   -fstrict-aliasing \
   -fvisibility=protected
 
+ifeq ($(TARGET_CPU_VARIANT),arm11)
+  art_cflags += -DARM_MODE_WORKAROUND
+endif
+
 ART_TARGET_CLANG_CFLAGS :=
 ART_TARGET_CLANG_CFLAGS_arm :=
 ART_TARGET_CLANG_CFLAGS_arm64 :=
