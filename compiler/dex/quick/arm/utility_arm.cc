@@ -71,6 +71,7 @@ static int32_t EncodeImmDouble(int64_t value) {
 
 LIR* ArmMir2Lir::LoadFPConstantValue(int r_dest, int value) {
   DCHECK(RegStorage::IsSingle(r_dest));
+#ifndef ARM_MODE_WORKAROUND
   if (value == 0) {
     // TODO: we need better info about the target CPU.  a vector exclusive or
     //       would probably be better here if we could rely on its existance.
@@ -93,8 +94,17 @@ LIR* ArmMir2Lir::LoadFPConstantValue(int r_dest, int value) {
                           r_dest, rs_r15pc.GetReg(), 0, 0, 0, data_target);
   AppendLIR(load_pc_rel);
   return load_pc_rel;
+#else
+  LIR* res;
+  RegStorage r_temp = AllocTemp();
+  LoadConstantNoClobber(r_temp, value);
+  res = NewLIR2(kThumb2Vmovs_IMM8, r_dest, r_temp.GetReg());
+  FreeTemp(r_temp);
+  return res;
+#endif
 }
 
+#ifndef ARM_MODE_WORKAROUND
 static int LeadingZeros(uint32_t val) {
   uint32_t alt;
   int32_t n;
@@ -145,6 +155,24 @@ int ArmMir2Lir::ModifiedImmediate(uint32_t value) {
   /* Put it all together */
   return value | ((0x8 + z_leading) << 7); /* [01000..11111]:bcdefgh */
 }
+#else
+uint32_t inline _rotl(const uint32_t value, int shift) {
+    if ((shift &= sizeof(value)*8 - 1) == 0)
+      return value;
+    return (value << shift) | (value >> (sizeof(value)*8 - shift));
+}
+
+// TODO -> Test this extensively
+int ArmMir2Lir::ModifiedImmediate(uint32_t value) {
+  int count;
+  for (count=0; count < 32; count+=2) {
+    if ((_rotl(value, count) & 0xFFFFFF00) == 0) {
+      return (count<<7 | _rotl(value, count));
+    }
+  }
+  return -1;
+}
+#endif
 
 bool ArmMir2Lir::InexpensiveConstantInt(int32_t value) {
   return (ModifiedImmediate(value) >= 0) || (ModifiedImmediate(~value) >= 0);
@@ -193,6 +221,7 @@ LIR* ArmMir2Lir::LoadConstantNoClobber(RegStorage r_dest, int value) {
     res = NewLIR2(kThumb2MvnI8M, r_dest.GetReg(), mod_imm);
     return res;
   }
+#ifndef ARM_MODE_WORKAROUND
   /* 16-bit immediate? */
   if ((value & 0xffff) == value) {
     res = NewLIR2(kThumb2MovImm16, r_dest.GetReg(), value);
@@ -201,6 +230,26 @@ LIR* ArmMir2Lir::LoadConstantNoClobber(RegStorage r_dest, int value) {
   /* Do a low/high pair */
   res = NewLIR2(kThumb2MovImm16, r_dest.GetReg(), Low16Bits(value));
   NewLIR2(kThumb2MovImm16H, r_dest.GetReg(), High16Bits(value));
+#else
+  /* This is an unfortunate hack, ARMv6 doesn't support movt/movw,
+   * so there isn't a fast way to load 32bits constants (I don't
+   * know how to implement "ldr rX, =#const" in ART).
+   * The most generic way is the following:
+   *   1. rX  = (const&0x000000FF)
+   *   2. rX |= (const&0x0000FF00)
+   *   3. rX |= (const&0x00FF0000)
+   *   4. rX |= (const&0xFF000000)
+   */
+
+  mod_imm = ModifiedImmediate(value & 0xFF);
+  res = NewLIR2(kThumb2MovI8M, r_dest.GetReg(), mod_imm);
+  mod_imm = ModifiedImmediate(value & 0xFF00);
+  NewLIR3(kThumb2OrrRRI8M, r_dest.GetReg(), r_dest.GetReg(), mod_imm);
+  mod_imm = ModifiedImmediate(value & 0xFF0000);
+  NewLIR3(kThumb2OrrRRI8M, r_dest.GetReg(), r_dest.GetReg(), mod_imm);
+  mod_imm = ModifiedImmediate(value & 0xFF000000);
+  NewLIR3(kThumb2OrrRRI8M, r_dest.GetReg(), r_dest.GetReg(), mod_imm);
+#endif
   return res;
 }
 
@@ -330,16 +379,26 @@ LIR* ArmMir2Lir::OpRegRegShift(OpKind op, RegStorage r_dest_src1, RegStorage r_s
     case kOpRev:
       DCHECK_EQ(shift, 0);
       if (!thumb_form) {
+#ifndef ARM_MODE_WORKAROUND
         // Binary, but rm is encoded twice.
         return NewLIR3(kThumb2RevRR, r_dest_src1.GetReg(), r_src2.GetReg(), r_src2.GetReg());
+#else
+        /* In ARM mode rm is encoded once. */
+        return NewLIR2(kThumb2RevRR, r_dest_src1.GetReg(), r_src2.GetReg());
+#endif
       }
       opcode = kThumbRev;
       break;
     case kOpRevsh:
       DCHECK_EQ(shift, 0);
       if (!thumb_form) {
+#ifndef ARM_MODE_WORKAROUND
         // Binary, but rm is encoded twice.
         return NewLIR3(kThumb2RevshRR, r_dest_src1.GetReg(), r_src2.GetReg(), r_src2.GetReg());
+#else
+        /* In ARM mode rm is encoded once. */
+        return NewLIR2(kThumb2RevshRR, r_dest_src1.GetReg(), r_src2.GetReg());
+#endif
       }
       opcode = kThumbRevsh;
       break;
@@ -514,6 +573,11 @@ LIR* ArmMir2Lir::OpRegRegImm(OpKind op, RegStorage r_dest, RegStorage r_src1, in
           op = (op == kOpAdd) ? kOpSub : kOpAdd;
         }
       }
+#ifndef ARM_MODE_WORKAROUND
+      /* ARM mode doesn't support 12bits imm,
+       * long way must be used.
+       */
+
       if (mod_imm < 0 && (abs_value & 0x3ff) == abs_value) {
         // This is deliberately used only if modified immediate encoding is inadequate since
         // we sometimes actually use the flags for small values but not necessarily low regs.
@@ -523,6 +587,7 @@ LIR* ArmMir2Lir::OpRegRegImm(OpKind op, RegStorage r_dest, RegStorage r_src1, in
           opcode = (neg) ? kThumb2AddRRI12 : kThumb2SubRRI12;
         return NewLIR3(opcode, r_dest.GetReg(), r_src1.GetReg(), abs_value);
       }
+#endif
       if (op == kOpSub) {
         opcode = kThumb2SubRRI8M;
         alt_opcode = kThumb2SubRRR;
@@ -605,7 +670,16 @@ LIR* ArmMir2Lir::OpRegRegImm(OpKind op, RegStorage r_dest, RegStorage r_src1, in
 LIR* ArmMir2Lir::OpRegImm(OpKind op, RegStorage r_dest_src1, int value) {
   bool neg = (value < 0);
   int32_t abs_value = (neg) ? -value : value;
+#ifndef ARM_MODE_WORKAROUND
   bool short_form = (((abs_value & 0xff) == abs_value) && r_dest_src1.Low8());
+#else
+  /* If short_from is true kThumbSubRI8/kThumbAddRI8 are used, but we can't
+   * use them because these instrucions need a ModImm. In place of handling
+   * ModImm here, we can let OpRegRegImm doing it for us (if short_form is false
+   * OpRegRegImm is called).
+   */
+  bool short_form = 0;
+#endif
   ArmOpcode opcode = kThumbBkpt;
   switch (op) {
     case kOpAdd:
@@ -649,6 +723,7 @@ LIR* ArmMir2Lir::LoadConstantWide(RegStorage r_dest, int64_t value) {
   int32_t val_hi = High32Bits(value);
   if (r_dest.IsFloat()) {
     DCHECK(!r_dest.IsPair());
+#ifndef ARM_MODE_WORKAROUND
     if ((val_lo == 0) && (val_hi == 0)) {
       // TODO: we need better info about the target CPU.  a vector exclusive or
       //       would probably be better here if we could rely on its existance.
@@ -662,14 +737,35 @@ LIR* ArmMir2Lir::LoadConstantWide(RegStorage r_dest, int64_t value) {
         res = NewLIR2(kThumb2Vmovd_IMM8, r_dest.GetReg(), encoded_imm);
       }
     }
+#else
+    int32_t reg_num = (r_dest.GetRegNum()*2)|RegStorage::kFloatingPoint|RegStorage::k32BitSolo;
+    RegStorage r_temp = AllocTemp();
+    LoadConstantNoClobber(r_temp, val_lo);
+    NewLIR2(kThumb2Vmovs_IMM8, reg_num, r_temp.GetReg());
+    LoadConstantNoClobber(r_temp, val_hi);
+    res = NewLIR2(kThumb2Vmovs_IMM8, reg_num+1, r_temp.GetReg());
+    FreeTemp(r_temp);
+#endif
   } else {
     // NOTE: Arm32 assumption here.
     DCHECK(r_dest.IsPair());
+#ifndef ARM_MODE_WORKAROUND
     if ((InexpensiveConstantInt(val_lo) && (InexpensiveConstantInt(val_hi)))) {
+#else
+    {
+#endif
       res = LoadConstantNoClobber(r_dest.GetLow(), val_lo);
       LoadConstantNoClobber(r_dest.GetHigh(), val_hi);
     }
   }
+#ifdef ARM_MODE_WORKAROUND
+  /* ARM mode: we do not need to fix "kThumb2LdrdPcRel8" because "res" is *never* NULL
+   * ( LoadConstantNoClobber can't fail )
+   */
+  if (res == NULL) {
+    LOG(FATAL) << "arm mode: res == null";
+  }
+#endif
   if (res == NULL) {
     // No short form - load from the literal pool.
     LIR* data_target = ScanLiteralPoolWide(literal_list_, val_lo, val_hi);
@@ -830,12 +926,27 @@ LIR* ArmMir2Lir::LoadStoreUsingInsnWithOffsetImm8Shl2(ArmOpcode opcode, RegStora
                                                       int displacement, RegStorage r_src_dest,
                                                       RegStorage r_work) {
   DCHECK_EQ(displacement & 3, 0);
+#ifndef ARM_MODE_WORKAROUND
   constexpr int kOffsetMask = 0xff << 2;
   int encoded_disp = (displacement & kOffsetMask) >> 2;  // Within range of the instruction.
+#else
+  int kOffsetMask;
+  int encoded_disp;
+
+  if (opcode == kThumb2LdrdI8 || opcode == kThumb2StrdI8) {
+    kOffsetMask = 0xff;
+    encoded_disp = displacement & kOffsetMask;
+  } else {
+    kOffsetMask = 0xff << 2;
+    encoded_disp = (displacement & kOffsetMask) >> 2;
+  }
+#endif
   RegStorage r_ptr = r_base;
   if ((displacement & ~kOffsetMask) != 0) {
+#ifndef ARM_MODE_WORKAROUND
     r_ptr = r_work.Valid() ? r_work : AllocTemp();
     // Add displacement & ~kOffsetMask to base, it's a single instruction for up to +-256KiB.
+#endif
     OpRegRegImm(kOpAdd, r_ptr, r_base, displacement & ~kOffsetMask);
   }
   LIR* lir = nullptr;
@@ -845,8 +956,13 @@ LIR* ArmMir2Lir::LoadStoreUsingInsnWithOffsetImm8Shl2(ArmOpcode opcode, RegStora
     lir = NewLIR4(opcode, r_src_dest.GetLowReg(), r_src_dest.GetHighReg(), r_ptr.GetReg(),
                   encoded_disp);
   }
+#ifndef ARM_MODE_WORKAROUND
   if ((displacement & ~kOffsetMask) != 0 && !r_work.Valid()) {
     FreeTemp(r_ptr);
+#else
+  if ((displacement & ~kOffsetMask) != 0) {
+    OpRegRegImm(kOpSub, r_ptr, r_base, displacement & ~kOffsetMask);
+#endif
   }
   return lir;
 }
@@ -915,15 +1031,29 @@ LIR* ArmMir2Lir::LoadBaseDispBody(RegStorage r_base, int displacement, RegStorag
       if (all_low && displacement < 64 && displacement >= 0) {
         DCHECK_EQ((displacement & 0x1), 0);
         short_form = true;
+#ifndef ARM_MODE_WORKAROUND
+        /* ARM mode,   offset = imm4H:imm4L
+         * Thumb mode, offset = imm5 / 2
+         * In arm mode we do not need to counterpoise the division.
+         */
         encoded_disp >>= 1;
+#endif
         opcode = kThumbLdrhRRI5;
+#ifndef ARM_MODE_WORKAROUND
       } else if (displacement < 4092 && displacement >= 0) {
+#else
+      } else if (displacement < 256 && displacement >= 0) {
+#endif
         short_form = true;
         opcode = kThumb2LdrhRRI12;
       }
       break;
     case kSignedHalf:
+#ifndef ARM_MODE_WORKAROUND
       if (thumb2Form) {
+#else
+      if (displacement < 256 && displacement >= 0) {
+#endif
         short_form = true;
         opcode = kThumb2LdrshRRI12;
       }
@@ -938,7 +1068,11 @@ LIR* ArmMir2Lir::LoadBaseDispBody(RegStorage r_base, int displacement, RegStorag
       }
       break;
     case kSignedByte:
+#ifndef ARM_MODE_WORKAROUND
       if (thumb2Form) {
+#else
+      if (displacement < 256 && displacement >= 0) {
+#endif
         short_form = true;
         opcode = kThumb2LdrsbRRI12;
       }
@@ -983,7 +1117,28 @@ LIR* ArmMir2Lir::LoadBaseDisp(RegStorage r_base, int displacement, RegStorage r_
     // Use LDREXD for the atomic load. (Expect displacement > 0, don't optimize for == 0.)
     RegStorage r_ptr = AllocTemp();
     OpRegRegImm(kOpAdd, r_ptr, r_base, displacement);
+#ifndef ARM_MODE_WORKAROUND
     LIR* lir = NewLIR3(kThumb2Ldrexd, r_dest.GetLowReg(), r_dest.GetHighReg(), r_ptr.GetReg());
+#else
+    LIR* lir;
+    bool isTemp = GetRegInfo(RegStorage(RegStorage::k32BitSolo, r_dest.GetLowReg()+1))->IsTemp();
+    if (((r_dest.GetLowReg() & 1) == 0x0 || r_dest.GetLowRegNum() < 13) && !isTemp) { // Assumption: rt != 15
+      if (r_dest.GetLowRegNum()+1 != r_dest.GetHighRegNum()) {
+        MarkTemp(RegStorage(RegStorage::k32BitSolo, r_dest.GetLowReg()+1));
+        NewLIR3(kThumb2Ldrexd, r_dest.GetLowReg(), r_dest.GetLowReg()+1, r_ptr.GetReg());
+        lir = NewLIR2(kThumb2MovRR, r_dest.GetHighReg(), r_dest.GetLowReg()+1);
+        UnmarkTemp(RegStorage(RegStorage::k32BitSolo, r_dest.GetLowReg()+1));
+      } else {
+        lir = NewLIR3(kThumb2Ldrexd, r_dest.GetLowReg(), r_dest.GetHighReg(), r_ptr.GetReg());
+      }
+    } else {
+      NewLIR1(kThumb2Push, 3); // We use r0 and r1
+      NewLIR3(kThumb2Ldrexd, 0|RegStorage::k32BitSolo, 1|RegStorage::k32BitSolo, r_ptr.GetReg());
+      NewLIR2(kThumb2MovRR, r_dest.GetLowReg(), 0|RegStorage::k32BitSolo);
+      NewLIR2(kThumb2MovRR, r_dest.GetHighReg(), 1|RegStorage::k32BitSolo);
+      lir = NewLIR1(kThumb2Pop, 3);
+    }
+#endif
     FreeTemp(r_ptr);
     return lir;
   } else {
@@ -1052,7 +1207,11 @@ LIR* ArmMir2Lir::StoreBaseDispBody(RegStorage r_base, int displacement, RegStora
         short_form = true;
         encoded_disp >>= 1;
         opcode = kThumbStrhRRI5;
+#ifndef ARM_MODE_WORKAROUND
       } else if (thumb2Form) {
+#else
+      } else if (displacement < 256 && displacement >= 0) {
+#endif
         short_form = true;
         opcode = kThumb2StrhRRI12;
       }
@@ -1107,6 +1266,7 @@ LIR* ArmMir2Lir::StoreBaseDisp(RegStorage r_base, int displacement, RegStorage r
     DCHECK(!r_src.IsFloat());  // See RegClassForFieldLoadSave().
     RegStorage r_ptr = AllocTemp();
     OpRegRegImm(kOpAdd, r_ptr, r_base, displacement);
+#ifndef ARM_MODE_WORKAROUND
     LIR* fail_target = NewLIR0(kPseudoTargetLabel);
     // We have only 5 temporary registers available and if r_base, r_src and r_ptr already
     // take 4, we can't directly allocate 2 more for LDREXD temps. In that case clobber r_ptr
@@ -1126,6 +1286,16 @@ LIR* ArmMir2Lir::StoreBaseDisp(RegStorage r_base, int displacement, RegStorage r
     store = NewLIR4(kThumb2Strexd, r_temp.GetReg(), r_src.GetLowReg(), r_src.GetHighReg(),
                     r_ptr.GetReg());
     OpCmpImmBranch(kCondNe, r_temp, 0, fail_target);
+#else
+    NewLIR1(kThumb2Push, 7);
+    LIR* fail_target = NewLIR0(kPseudoTargetLabel);
+    NewLIR3(kThumb2Ldrexd, 0|RegStorage::k32BitSolo, 1|RegStorage::k32BitSolo, r_ptr.GetReg());
+    NewLIR4(kThumb2Strexd, 0|RegStorage::k32BitSolo, 1|RegStorage::k32BitSolo, 2|RegStorage::k32BitSolo, r_ptr.GetReg());
+    OpCmpImmBranch(kCondNe, RegStorage(RegStorage::k32BitSolo, 0), 0, fail_target);
+    NewLIR2(kThumb2MovRR, r_src.GetLowReg(), 1|RegStorage::k32BitSolo);
+    NewLIR2(kThumb2MovRR, r_src.GetHighReg(), 2|RegStorage::k32BitSolo);
+    store = NewLIR1(kThumb2Pop, 7);
+#endif
     FreeTemp(r_ptr);
   } else {
     // TODO: base this on target.
