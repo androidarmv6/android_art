@@ -83,6 +83,11 @@ $(info Enabling ART_USE_PORTABLE_COMPILER because WITH_ART_USE_PORTABLE_COMPILER
 ART_USE_PORTABLE_COMPILER := true
 endif
 
+ifeq ($(ART_USE_PORTABLE_COMPILER),true)
+DEX2OAT_FLAGS := --compiler-backend=Portable
+DALVIKVM_FLAGS += -Xcompiler-option --compiler-backend=Portable
+endif
+
 #
 # Used to enable optimizing compiler
 #
