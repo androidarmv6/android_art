@@ -373,14 +373,15 @@ END art_quick_handle_fill_data
     .extern artLockObjectFromCode
 ENTRY art_quick_lock_object
     cbz    r0, .Lslow_lock
+    add    r0, #LOCK_WORD_OFFSET
 .Lretry_lock:
     ldr    r2, [r9, #THREAD_ID_OFFSET]
-    ldrex  r1, [r0, #LOCK_WORD_OFFSET]
+    ldrex  r1, [r0]
     cbnz   r1, .Lnot_unlocked         @ already thin locked
     @ unlocked case - r2 holds thread id with count of 0
-    strex  r3, r2, [r0, #LOCK_WORD_OFFSET]
+    strex  r3, r2, [r0]
     cbnz   r3, .Lstrex_fail           @ store failed, retry
-    dmb    ish                        @ full (LoadLoad|LoadStore) memory barrier
+/*  dmb    ish                        @ full (LoadLoad|LoadStore) memory barrier*/
     bx lr
 .Lstrex_fail:
     b .Lretry_lock                    @ unlikely forward branch, need to reload and recheck r1/r2
@@ -394,12 +395,14 @@ ENTRY art_quick_lock_object
     add    r2, r1, #65536             @ increment count in lock word placing in r2 for storing
     lsr    r1, r2, 30                 @ if either of the top two bits are set, we overflowed.
     cbnz   r1, .Lslow_lock            @ if we overflow the count go slow path
-    str    r2, [r0, #LOCK_WORD_OFFSET] @ no need for strex as we hold the lock
+    str    r2, [r0]                   @ no need for strex as we hold the lock
+    sub    r0, #LOCK_WORD_OFFSET
     bx lr
 .Lslow_lock:
     SETUP_REF_ONLY_CALLEE_SAVE_FRAME  @ save callee saves in case we block
     mov    r1, r9                     @ pass Thread::Current
     mov    r2, sp                     @ pass SP
+    sub    r0, #LOCK_WORD_OFFSET
     bl     artLockObjectFromCode      @ (Object* obj, Thread*, SP)
     RESTORE_REF_ONLY_CALLEE_SAVE_FRAME
     RETURN_IF_RESULT_IS_ZERO
@@ -423,7 +426,7 @@ ENTRY art_quick_unlock_object
     cmp    r1, #65536
     bpl    .Lrecursive_thin_unlock
     @ transition to unlocked, r3 holds 0
-    dmb    ish                        @ full (LoadStore|StoreStore) memory barrier
+/*  dmb    ish                        @ full (LoadStore|StoreStore) memory barrier */
     str    r3, [r0, #LOCK_WORD_OFFSET]
     bx     lr
 .Lrecursive_thin_unlock:
