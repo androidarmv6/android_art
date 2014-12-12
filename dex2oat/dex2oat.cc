@@ -940,7 +940,11 @@ static int dex2oat(int argc, char** argv) {
     } else if (option.starts_with("--instruction-set=")) {
       StringPiece instruction_set_str = option.substr(strlen("--instruction-set=")).data();
       if (instruction_set_str == "arm") {
+#if __ARM_ARCH >= 7
         instruction_set = kThumb2;
+#else
+        instruction_set = kArm;
+#endif
       } else if (instruction_set_str == "arm64") {
         instruction_set = kArm64;
       } else if (instruction_set_str == "mips") {
@@ -1512,8 +1516,8 @@ static int dex2oat(int argc, char** argv) {
   }
 
 #if ART_USE_PORTABLE_COMPILER  // We currently only generate symbols on Portable
-  if (!compiler_options.GetIncludeDebugSymbols()) {
-    timings.NewSplit("dex2oat ElfStripper");
+  if (!compiler_options->GetIncludeDebugSymbols()) {
+    TimingLogger::ScopedTiming t("dex2oat ElfStripper", &timings);
     // Strip unneeded sections for target
     off_t seek_actual = lseek(oat_file->Fd(), 0, SEEK_SET);
     CHECK_EQ(0, seek_actual);
