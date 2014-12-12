@@ -372,20 +372,24 @@ END art_quick_handle_fill_data
      */
     .extern artLockObjectFromCode
 ENTRY art_quick_lock_object
-    cbz    r0, .Lslow_lock
+    cbz    r0, .Lslow_lock            @ If Object is null, go to slow_lock
 .Lretry_lock:
     ldr    r2, [r9, #THREAD_ID_OFFSET]
-    ldrex  r1, [r0, #LOCK_WORD_OFFSET]
+    add    r0, r0, #LOCK_WORD_OFFSET  @ Object->lock
+    ldrex  r1, [r0]                   @ Load the lock value
+    sub    r0, r0, #LOCK_WORD_OFFSET  @ Object
     cbnz   r1, .Lnot_unlocked         @ already thin locked
     @ unlocked case - r2 holds thread id with count of 0
-    strex  r3, r2, [r0, #LOCK_WORD_OFFSET]
+    add    r0, r0, #LOCK_WORD_OFFSET  @ Object->lock
+    strex  r3, r2, [r0]               @ Try to store Object->lock
+    sub    r0, r0, #LOCK_WORD_OFFSET  @ Object
     cbnz   r3, .Lstrex_fail           @ store failed, retry
-    dmb    ish                        @ full (LoadLoad|LoadStore) memory barrier
+/*  dmb    ish                        @ full (LoadLoad|LoadStore) memory barrier*/
     bx lr
 .Lstrex_fail:
     b .Lretry_lock                    @ unlikely forward branch, need to reload and recheck r1/r2
 .Lnot_unlocked:
-    lsr    r3, r1, 30
+    lsr    r3, r1, 30                 @ the top two bits of Object->lock
     cbnz   r3, .Lslow_lock            @ if either of the top two bits are set, go slow path
     eor    r2, r1, r2                 @ lock_word.ThreadId() ^ self->ThreadId()
     uxth   r2, r2                     @ zero top 16 bits
@@ -394,7 +398,7 @@ ENTRY art_quick_lock_object
     add    r2, r1, #65536             @ increment count in lock word placing in r2 for storing
     lsr    r1, r2, 30                 @ if either of the top two bits are set, we overflowed.
     cbnz   r1, .Lslow_lock            @ if we overflow the count go slow path
-    str    r2, [r0, #LOCK_WORD_OFFSET] @ no need for strex as we hold the lock
+    str    r2, [r0,#LOCK_WORD_OFFSET] @ no need for strex as we hold the lock
     bx lr
 .Lslow_lock:
     SETUP_REF_ONLY_CALLEE_SAVE_FRAME  @ save callee saves in case we block
@@ -423,7 +427,7 @@ ENTRY art_quick_unlock_object
     cmp    r1, #65536
     bpl    .Lrecursive_thin_unlock
     @ transition to unlocked, r3 holds 0
-    dmb    ish                        @ full (LoadStore|StoreStore) memory barrier
+/*  dmb    ish                        @ full (LoadStore|StoreStore) memory barrier */
     str    r3, [r0, #LOCK_WORD_OFFSET]
     bx     lr
 .Lrecursive_thin_unlock:
