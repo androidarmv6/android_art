@@ -650,9 +650,11 @@ static CompiledMethod* CompileMethod(CompilerDriver& driver,
   cu.compiler_driver = &driver;
   cu.class_linker = class_linker;
   cu.instruction_set = driver.GetInstructionSet();
+#if __ARM_ARCH >= 7
   if (cu.instruction_set == kArm) {
     cu.instruction_set = kThumb2;
   }
+#endif
   cu.target64 = Is64BitInstructionSet(cu.instruction_set);
   cu.compiler = compiler;
   // TODO: Mips64 is not yet implemented.

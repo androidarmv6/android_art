@@ -79,11 +79,13 @@ CompiledMethod* OptimizingCompiler::TryCompile(const DexFile::CodeItem* code_ite
                                                jobject class_loader,
                                                const DexFile& dex_file) const {
   InstructionSet instruction_set = GetCompilerDriver()->GetInstructionSet();
+#if __ARM_ARCH >= 7
   // Always use the thumb2 assembler: some runtime functionality (like implicit stack
   // overflow checks) assume thumb2.
   if (instruction_set == kArm) {
     instruction_set = kThumb2;
   }
+#endif
 
   // Do not attempt to compile on architectures we do not support.
   if (instruction_set != kX86 && instruction_set != kX86_64 && instruction_set != kThumb2) {

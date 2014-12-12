@@ -1708,7 +1708,11 @@ static int oatdump(int argc, char** argv) {
     } else if (option.starts_with("--instruction-set=")) {
       StringPiece instruction_set_str = option.substr(strlen("--instruction-set=")).data();
       if (instruction_set_str == "arm") {
+#if __ARM_ARCH >= 7
         instruction_set = kThumb2;
+#else
+        instruction_set = kArm;
+#endif
       } else if (instruction_set_str == "arm64") {
         instruction_set = kArm64;
       } else if (instruction_set_str == "mips") {

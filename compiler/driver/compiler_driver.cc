@@ -2134,11 +2134,17 @@ void CompilerDriver::InstructionSetToLLVMTarget(InstructionSet instruction_set,
       break;
 
     case kArm:
+#if __ARM_ARCH >= 7
       *target_triple = "armv7-none-linux-gnueabi";
       // TODO: Fix for Nexus S.
       *target_cpu = "cortex-a9";
       // TODO: Fix for Xoom.
       *target_attr = "+v7,+neon,+neonfp,+vfp3,+db";
+#else
+      *target_triple = "armv6-none-linux-gnueabi";
+      *target_cpu = "arm1136jf-s";
+      *target_attr = "+v6,+vfp2";
+#endif
       break;
 
     case kX86:
