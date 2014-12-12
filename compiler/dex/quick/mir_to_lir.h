@@ -180,6 +180,10 @@ struct LIR {
     bool use_def_invalid:1;      // If true, masks should not be used.
     unsigned int generation:1;   // Used to track visitation state during fixup pass.
     unsigned int fixup:8;        // Fixup kind.
+#ifdef ARM_MODE_WORKAROUND
+    int ccode;                   // ARM assembler need this to fix the cc field (thumb2
+                                 // don't need this because cc is handled by IT)
+#endif
   } flags;
   union {
     UseDefMasks m;               // Use & Def masks used during optimization.
