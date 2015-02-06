@@ -30,7 +30,9 @@
 #include "ScopedFd.h"
 #include "utils.h"
 
+#ifndef ART_FORCE_NO_ASHMEM
 #define USE_ASHMEM 1
+#endif
 
 #ifdef USE_ASHMEM
 #include <cutils/ashmem.h>

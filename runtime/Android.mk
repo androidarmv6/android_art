@@ -330,6 +330,10 @@ ifeq ($(ART_USE_HSPACE_COMPACT),true)
   LIBART_CFLAGS += -DART_USE_HSPACE_COMPACT
 endif
 
+ifeq ($(ART_FORCE_NO_ASHMEM),true)
+  LIBART_CFLAGS += -DART_FORCE_NO_ASHMEM
+endif
+
 # $(1): target or host
 # $(2): ndebug or debug
 define build-libart
