@@ -243,7 +243,7 @@ MemMap* MemMap::MapAnonymous(const char* name, byte* expected_ptr, size_t byte_c
   }
   size_t page_aligned_byte_count = RoundUp(byte_count, kPageSize);
 
-  int flags = MAP_PRIVATE | MAP_ANONYMOUS;
+  int flags = MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED;
   ScopedFd fd(-1);
 
 #ifdef USE_ASHMEM
